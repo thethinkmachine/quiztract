@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{ data.exam.exam_title or data.exam.exam_code or 'Exam' }}</title>
+<meta name="description" content="Extracted exam: {{ data.exam.exam_code or '' }}">
+<link rel="stylesheet" href="{{ katex_cdn }}/katex.min.css">
+<script defer src="{{ katex_cdn }}/katex.min.js"></script>
+<script defer src="{{ katex_cdn }}/contrib/auto-render.min.js"
+    onload="renderMathInElement(document.body, {delimiters:[
+        {left:'$$',right:'$$',display:true},
+        {left:'$',right:'$',display:false}
+    ]});"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;line-height:1.6;color:#1a1a2e;background:#f8f9fa;display:flex}
+.sidebar{position:fixed;left:0;top:0;width:220px;height:100vh;background:#1a1a2e;color:#fff;padding:20px;overflow-y:auto;z-index:10}
+.sidebar h3{margin-bottom:12px;font-size:14px;text-transform:uppercase;letter-spacing:1px;color:#8892b0}
+.sidebar a{display:block;color:#ccd6f6;text-decoration:none;padding:4px 8px;font-size:13px;border-radius:4px;margin-bottom:2px;transition:background .2s}
+.sidebar a:hover{background:rgba(255,255,255,.1)}
+.sidebar a.review{color:#ffc107}
+main{margin-left:240px;max-width:900px;padding:40px}
+h1{font-size:28px;margin-bottom:16px;color:#1a1a2e}
+h2{font-size:22px;margin:32px 0 16px;color:#1a1a2e;border-bottom:2px solid #e8e8e8;padding-bottom:8px}
+.question{background:#fff;border-radius:8px;padding:24px;margin-bottom:20px;box-shadow:0 1px 3px rgba(0,0,0,.08);transition:box-shadow .2s}
+.question:hover{box-shadow:0 2px 8px rgba(0,0,0,.12)}
+.question.needs-review{border-left:4px solid #ffc107}
+.q-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+.q-type{background:#e3f2fd;color:#1565c0;padding:2px 8px;border-radius:4px;font-size:12px;font-weight:600}
+.q-marks{color:#666;font-size:13px}
+.warning{background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:12px;margin:12px 0;font-size:14px}
+.warning::before{content:'⚠️ '}
+.options{list-style:none;padding:0;margin:12px 0}
+.options li{padding:8px 12px;margin:4px 0;background:#f8f9fa;border-radius:6px;font-size:14px}
+.options li.correct{background:#d4edda;border:1px solid #28a745}
+.answer-info{background:#f0f4f8;padding:12px;border-radius:6px;margin:12px 0;font-size:14px}
+figure{margin:16px 0;text-align:center}
+figure img{max-width:100%;border-radius:4px;border:1px solid #dee2e6}
+figcaption{color:#666;font-size:13px;margin-top:8px;font-style:italic}
+.meta-table{width:100%;border-collapse:collapse;margin:16px 0}
+.meta-table th,.meta-table td{padding:8px 12px;border:1px solid #dee2e6;text-align:left;font-size:14px}
+.meta-table th{background:#f8f9fa;font-weight:600}
+@media print{.sidebar{display:none}main{margin-left:0}body{background:#fff}.question{box-shadow:none;border:1px solid #ddd}}
+</style>
+</head>
+<body>
+
+<nav class="sidebar">
+  <h3>Questions</h3>
+  {% for q in data.questions %}
+  <a href="#q-{{ q.question_id }}" {% if q.extraction_metadata.needs_review %}class="review"{% endif %}>
+    Q{{ q.question_number or loop.index }}
+    {% if q.extraction_metadata.needs_review %}⚠️{% endif %}
+  </a>
+  {% endfor %}
+</nav>
+
+<main>
+  <h1>{{ data.exam.exam_title or data.exam.exam_code or 'Exam' }}</h1>
+
+  {% if data.exam.subject %}<p><strong>Subject:</strong> {{ data.exam.subject }}</p>{% endif %}
+  {% if data.exam.exam_code %}<p><strong>Code:</strong> {{ data.exam.exam_code }}</p>{% endif %}
+  {% if data.exam.exam_date %}<p><strong>Date:</strong> {{ data.exam.exam_date }}</p>{% endif %}
+
+  {% if data.sections %}
+  <h2>Sections</h2>
+  <table class="meta-table">
+    <thead><tr><th>#</th><th>Section</th><th>Questions</th><th>Marks</th></tr></thead>
+    <tbody>
+    {% for s in data.sections %}
+    <tr>
+      <td>{{ s.section_number or loop.index }}</td>
+      <td>{{ s.section_name or s.section_id }}</td>
+      <td>{{ s.num_questions }}</td>
+      <td>{{ s.section_marks }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  <h2>Questions</h2>
+
+  {% for q in data.questions %}
+  <div class="question{% if q.extraction_metadata.needs_review %} needs-review{% endif %}" id="q-{{ q.question_id }}">
+    <div class="q-header">
+      <span>Q{{ q.question_number or loop.index }} <span class="q-type">{{ q.question_type }}</span></span>
+      <span class="q-marks">+{{ q.correct_marks }} / -{{ q.negative_marks or 0 }}</span>
+    </div>
+
+    {% if include_warnings and q.extraction_metadata.needs_review %}
+    <div class="warning">Needs review: {{ q.extraction_metadata.review_reason or 'Unknown' }}</div>
+    {% endif %}
+
+    {# Comprehension preamble #}
+    {% if q.comprehension %}
+      {% if q.comprehension.comprehension_text %}
+      <div class="answer-info"><strong>Passage:</strong><br>{{ q.comprehension.comprehension_text }}</div>
+      {% endif %}
+      {% if q.comprehension.comprehension_text_latex %}
+      <p>$${{ q.comprehension.comprehension_text_latex }}$$</p>
+      {% endif %}
+      {% for fig in q.comprehension.figures or [] %}
+      <figure>
+        <img src="{{ fig.image_asset_path }}" alt="{{ fig.alt_text or fig.figure_description or '' }}">
+        {% if fig.figure_description %}<figcaption>{{ fig.figure_description }}</figcaption>{% endif %}
+      </figure>
+      {% endfor %}
+    {% endif %}
+
+    {# Question text #}
+    {% if q.question_text %}<p>{{ q.question_text }}</p>{% endif %}
+    {% if q.question_text_latex %}<p>$${{ q.question_text_latex }}$$</p>
+    {% elif q.math_crop_path %}<img src="{{ q.math_crop_path }}" alt="math expression">{% endif %}
+
+    {# Figures #}
+    {% for fig in q.figures or [] %}
+    <figure>
+      <img src="{{ fig.image_asset_path }}" alt="{{ fig.alt_text or fig.figure_description or '' }}">
+      {% if fig.figure_description %}<figcaption>{{ fig.figure_description }}</figcaption>{% endif %}
+    </figure>
+    {% endfor %}
+
+    {# MCQ options #}
+    {% if q.mcq %}
+    <p><strong>Options:</strong></p>
+    <ul class="options">
+      {% for o in q.mcq.options %}
+      <li{% if o.is_correct %} class="correct"{% endif %}>
+        <strong>{{ o.option_id }}.</strong>
+        {% if o.option_text_latex %}{{ o.option_text }} ${{ o.option_text_latex }}$
+        {% elif o.option_image_path and not o.option_text %}<img src="{{ o.option_image_path }}" alt="option">
+        {% else %}{{ o.option_text }}{% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+    {% if q.mcq.correct_option_id %}<p><strong>Answer:</strong> {{ q.mcq.correct_option_id }}</p>{% endif %}
+    {% endif %}
+
+    {# MSQ options #}
+    {% if q.msq %}
+    <p><strong>Options (Multiple Select):</strong></p>
+    <ul class="options">
+      {% for o in q.msq.options %}
+      <li{% if o.is_correct %} class="correct"{% endif %}><strong>{{ o.option_id }}.</strong> {{ o.option_text }}</li>
+      {% endfor %}
+    </ul>
+    {% if q.msq.correct_option_ids %}<p><strong>Answers:</strong> {{ q.msq.correct_option_ids | join(', ') }}</p>{% endif %}
+    {% endif %}
+
+    {# SA answer #}
+    {% if q.sa %}
+    <div class="answer-info">
+      {% if q.sa.response_type %}<p><strong>Response:</strong> {{ q.sa.response_type }}</p>{% endif %}
+      {% if q.sa.answers_type %}<p><strong>Type:</strong> {{ q.sa.answers_type }}</p>{% endif %}
+      {% if q.sa.answer_range %}<p><strong>Range:</strong> {{ q.sa.answer_range.min }} to {{ q.sa.answer_range.max }}</p>{% endif %}
+      {% if q.sa.possible_answers %}
+      <p><strong>Answers:</strong></p>
+      <ul>{% for a in q.sa.possible_answers %}<li>{{ a }}</li>{% endfor %}</ul>
+      {% endif %}
+      {% if q.sa.answer_truncated_across_page %}<div class="warning">Answer may be truncated</div>{% endif %}
+    </div>
+    {% endif %}
+  </div>
+  {% endfor %}
+
+</main>
+</body>
+</html>

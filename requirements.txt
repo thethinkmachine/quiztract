@@ -1,0 +1,28 @@
+# PDF processing and VLM
+docling>=2.0.0
+transformers>=4.40.0
+torch>=2.1.0
+Pillow>=10.0.0
+pdf2image>=1.17.0
+pymupdf>=1.24.0
+
+# Schema and data modeling
+pydantic>=2.0.0
+jsonschema>=4.21.0
+
+# Configuration
+pyyaml>=6.0.0
+python-dotenv>=1.0.0
+
+# LaTeX handling
+pylatexenc>=2.10
+
+# Output rendering
+markdown>=3.5.0
+jinja2>=3.1.0
+
+# Utilities
+tqdm>=4.66.0
+loguru>=0.7.0
+click>=8.1.0
+rich>=13.0.0
