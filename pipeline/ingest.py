@@ -146,7 +146,7 @@ def _render_pages(pdf_path: Path, dpi: int) -> list[Image.Image]:
 
         images = convert_from_path(str(pdf_path), dpi=dpi, fmt="png")
         return images
-    except ImportError:
+    except Exception:
         logger.warning("pdf2image not installed — falling back to pymupdf for rasterisation")
         return _render_pages_pymupdf(pdf_path, dpi)
 
@@ -181,7 +181,7 @@ def _parse_with_docling(pdf_path: Path) -> Any:
         result = converter.convert(str(pdf_path))
         logger.info("Docling parse successful")
         return result
-    except ImportError:
+    except Exception:
         logger.warning(
             "docling not installed — text extraction will rely on pymupdf fallback"
         )
@@ -221,7 +221,12 @@ def _extract_page_text(page_num: int, docling_result: Any) -> str:
             item = element
             # Handle tuple returns from iterate_items
             if isinstance(element, tuple):
-                item = element[1] if len(element) > 1 else element[0]
+                if hasattr(element[0], "prov"):
+                    item = element[0]
+                elif len(element) > 1 and hasattr(element[1], "prov"):
+                    item = element[1]
+                else:
+                    item = element[0]
 
             # Check if this element belongs to our page
             prov = getattr(item, "prov", None)
@@ -250,8 +255,14 @@ def _extract_page_blocks(page_num: int, docling_result: Any) -> list[Any]:
 
         for element in doc.iterate_items():
             item = element
+            # Handle tuple returns from iterate_items
             if isinstance(element, tuple):
-                item = element[1] if len(element) > 1 else element[0]
+                if hasattr(element[0], "prov"):
+                    item = element[0]
+                elif len(element) > 1 and hasattr(element[1], "prov"):
+                    item = element[1]
+                else:
+                    item = element[0]
 
             prov = getattr(item, "prov", None)
             if prov and len(prov) > 0:

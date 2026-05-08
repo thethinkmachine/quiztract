@@ -4,53 +4,19 @@ ingest:
   fail_on_parse_error: false
   debug_save_page_rasters: false
 
-classify:
-  confidence_threshold: 0.75
-  metadata_field_patterns:
-    - "Question Id"
-    - "Question Number"
-    - "Question Type"
-    - "Question Label"
-    - "Correct Marks"
-    - "Negative Marks"
-    - "Response Type"
-    - "Answers Type"
-    - "Possible Answers"
-    - "Answer Range"
-    - "Evaluation Required For SA"
-    - "Sub Question Shuffling Allowed"
-    - "Group Comprehension Questions"
-    - "Question Numbers"
-    - "Question Pattern Type"
-    - "Section"
-
 extract:
-  vlm_model_id: "ibm-granite/granite-vision-4.1-4b"
+  vlm_model_id: "ibm-granite/granite-vision-3.3-2b"
   vlm_device: "cuda"
-  vlm_max_new_tokens: 1024
+  vlm_4bit_quantization: true
+  vlm_max_new_tokens: 4096
+  hf_cache_dir: "~/.cache/huggingface"
+  vlm_gpu_max_memory_gb: 5
+  vlm_cpu_max_memory_gb: 32
+  vlm_offload_dir: "~/.cache/quiztract/vlm-offload"
   math_crop_padding_px: 8
   figure_crop_padding_px: 12
   always_save_math_crops: true
   always_save_figure_crops: true
-
-stitch:
-  max_lookahead_pages: 2
-  truncation_sentinel_keys:
-    - "Possible Answers"
-    - "Answer Range"
-
-validate:
-  warn_on_missing_correct_option: true
-  warn_on_empty_sub_questions: true
-  latex_balance_check: true
-  matrix_dimension_check: true
-  min_mcq_options: 2
-  max_mcq_options: 6
-
-assemble:
-  json_indent: 2
-  ensure_ascii: false
-  run_schema_validation: true
 
 render:
   katex_cdn: "https://cdn.jsdelivr.net/npm/katex@0.16.9/dist"

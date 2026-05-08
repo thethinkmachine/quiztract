@@ -1,6 +1,8 @@
 # PDF processing and VLM
 docling>=2.0.0
-transformers>=4.40.0
+transformers>=5.8.0
+accelerate>=0.33.0
+bitsandbytes>=0.43.0
 torch>=2.1.0
 Pillow>=10.0.0
 pdf2image>=1.17.0

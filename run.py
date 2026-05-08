@@ -56,39 +56,142 @@ def _load_vlm(config: dict[str, Any]) -> Any:
     extract_cfg = config.get("extract", {})
     model_id = extract_cfg.get("vlm_model_id") or os.getenv("VLM_MODEL_ID", "ibm-granite/granite-vision-4.1-4b")
     device = extract_cfg.get("vlm_device") or os.getenv("VLM_DEVICE", "cpu")
-    max_tokens = extract_cfg.get("vlm_max_new_tokens") or int(os.getenv("VLM_MAX_NEW_TOKENS", "1024"))
+    max_tokens = extract_cfg.get("vlm_max_new_tokens") or int(os.getenv("VLM_MAX_NEW_TOKENS", "4096"))
+    hf_cache_dir_value = extract_cfg.get("hf_cache_dir") or os.getenv("HF_HUB_CACHE") or os.getenv("HF_HOME")
+    hf_cache_dir = Path(hf_cache_dir_value).expanduser() if hf_cache_dir_value else None
+    if hf_cache_dir is not None:
+        hf_cache_dir.mkdir(parents=True, exist_ok=True)
+
+    offload_dir_value = extract_cfg.get("vlm_offload_dir") or os.getenv(
+        "VLM_OFFLOAD_DIR",
+        str(Path.home() / ".cache" / "quiztract" / "vlm-offload"),
+    )
+    offload_dir = Path(offload_dir_value).expanduser()
+    offload_dir.mkdir(parents=True, exist_ok=True)
 
     console.print(f"[bold blue]Loading VLM:[/] {model_id} on {device}")
 
     try:
-        from transformers import AutoModelForVision2Seq, AutoProcessor
+        from transformers import AutoModelForImageTextToText, AutoProcessor
         import torch
 
-        processor = AutoProcessor.from_pretrained(model_id)
-        model = AutoModelForVision2Seq.from_pretrained(
-            model_id,
-            torch_dtype=torch.float16 if device != "cpu" else torch.float32,
-        )
-        model = model.to(device)
-        model.eval()
+        def _load_components(trust_remote_code: bool) -> tuple[Any, Any]:
+            pretrained_kwargs: dict[str, Any] = {"trust_remote_code": trust_remote_code}
+            if hf_cache_dir is not None:
+                pretrained_kwargs["cache_dir"] = str(hf_cache_dir)
 
-        def vlm_fn(image, prompt: str) -> str:
-            """Run VLM inference on an image with a text prompt."""
-            inputs = processor(images=image, text=prompt, return_tensors="pt").to(device)
-            with torch.no_grad():
-                outputs = model.generate(**inputs, max_new_tokens=max_tokens)
-            result = processor.decode(outputs[0], skip_special_tokens=True)
-            # Strip the prompt from the output if echoed
-            if result.startswith(prompt):
-                result = result[len(prompt):].strip()
-            return result
+            processor = AutoProcessor.from_pretrained(
+                model_id,
+                **pretrained_kwargs,
+            )
+            if getattr(processor, "tokenizer", None) is not None:
+                processor.tokenizer.padding_side = "left"  # Required for correct generation
 
-        console.print("[bold green]✓ VLM loaded successfully[/]")
-        return vlm_fn
+            if device == "cpu":
+                dtype = torch.float32
+                model_kwargs: dict[str, Any] = {
+                    "dtype": dtype,
+                    "device_map": None,
+                    "low_cpu_mem_usage": True,
+                }
+            else:
+                dtype = torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else torch.float16
+                gpu_total_gib = 0
+                if torch.cuda.is_available():
+                    gpu_total_gib = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+                default_gpu_budget_gib = max(2, int(gpu_total_gib * 0.75) if gpu_total_gib else 4)
+                configured_gpu_budget = extract_cfg.get("vlm_gpu_max_memory_gb")
+                gpu_budget_gib = int(
+                    configured_gpu_budget
+                    if configured_gpu_budget is not None
+                    else os.getenv("VLM_GPU_MAX_MEMORY_GB", str(default_gpu_budget_gib))
+                )
+                configured_cpu_budget = extract_cfg.get("vlm_cpu_max_memory_gb")
+                cpu_budget_gib = int(
+                    configured_cpu_budget
+                    if configured_cpu_budget is not None
+                    else os.getenv("VLM_CPU_MAX_MEMORY_GB", "32")
+                )
+                model_kwargs = {
+                    "dtype": dtype,
+                    "device_map": "auto",
+                    "low_cpu_mem_usage": True,
+                    "max_memory": {0: f"{gpu_budget_gib}GiB", "cpu": f"{cpu_budget_gib}GiB"},
+                    "offload_folder": str(offload_dir),
+                    "offload_state_dict": True,
+                }
 
-    except Exception as exc:
-        console.print(f"[bold yellow]⚠ VLM loading failed: {exc}[/]")
-        console.print("[dim]Pipeline will run without VLM — raster-only fallback for non-text blocks[/]")
+                use_4bit = extract_cfg.get("vlm_4bit_quantization", False)
+                if use_4bit:
+                    from transformers import BitsAndBytesConfig
+                    model_kwargs["quantization_config"] = BitsAndBytesConfig(
+                        load_in_4bit=True,
+                        bnb_4bit_compute_dtype=dtype,
+                        bnb_4bit_use_double_quant=True,
+                        bnb_4bit_quant_type="nf4",
+                    )
+
+            model = AutoModelForImageTextToText.from_pretrained(
+                model_id,
+                **pretrained_kwargs,
+                **model_kwargs,
+            ).eval()
+            return processor, model
+
+        last_error: Exception | None = None
+        for trust_remote_code in (False, True):
+            try:
+                processor, model = _load_components(trust_remote_code)
+
+                def vlm_fn(image, prompt: str) -> str:
+                    """Run VLM inference using official Granite Vision chat template style."""
+                    conversation = [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "image"},
+                                {"type": "text", "text": prompt},
+                            ],
+                        }
+                    ]
+
+                    text = processor.apply_chat_template(conversation, tokenize=False, add_generation_prompt=True)
+                    inputs = processor(text=[text], images=[image], return_tensors="pt").to(model.device)
+
+                    with torch.no_grad():
+                        outputs = model.generate(
+                            **inputs,
+                            max_new_tokens=max_tokens,
+                            use_cache=True,
+                        )
+
+                    generated_ids = outputs[0, inputs["input_ids"].shape[1]:]
+                    result = processor.decode(generated_ids, skip_special_tokens=True)
+
+                    return result.strip()
+
+                if trust_remote_code:
+                    console.print("[dim]Granite Vision loaded via trust_remote_code compatibility path[/]")
+                console.print("[bold green]✓ VLM loaded successfully[/]")
+                return vlm_fn
+            except Exception as exc:
+                last_error = exc
+                if not trust_remote_code:
+                    console.print("[yellow]Native Granite Vision load failed; retrying with trust_remote_code=True[/]")
+                    continue
+                break
+
+        if last_error is not None:
+            console.print(f"[bold yellow]⚠ VLM loading failed: {last_error}[/]")
+        return None
+
+    except ImportError as e:
+        error_text = str(e)
+        if "AutoModelForImageTextToText" in error_text or "AutoModelForVision2Seq" in error_text:
+            console.print("[bold red]⚠ Error: Granite Vision requires a recent 'transformers' install.[/]")
+            console.print("[yellow]Please run: pip install -r requirements.txt[/]")
+        else:
+            console.print(f"[bold yellow]⚠ ImportError: {e}[/]")
         return None
 
 
@@ -98,16 +201,11 @@ def _run_pipeline(
     config: dict[str, Any],
     vlm_fn: Any | None,
     skip_render: bool,
-    skip_validation: bool,
     debug: bool,
 ) -> None:
     """Run the full pipeline on a single PDF."""
     from pipeline.ingest import ingest_pdf
-    from pipeline.classify import classify_document
-    from pipeline.extract import extract_content
-    from pipeline.stitch import stitch_pages
-    from pipeline.validate import validate_document
-    from pipeline.assemble import assemble_json
+    from pipeline.process import process_document
     from pipeline.render import render_outputs
 
     output_cfg = config.get("output", {})
@@ -121,63 +219,28 @@ def _run_pipeline(
     ))
 
     # Stage 1: Ingest
-    console.print("\n[bold cyan]Stage 1/6:[/] PDF Ingestion & Segmentation")
+    console.print("\n[bold cyan]Stage 1/3:[/] PDF Ingestion & Segmentation")
     pages = ingest_pdf(pdf_path, config)
     console.print(f"  → {len(pages)} pages ingested")
 
-    # Stage 2: Classify
-    console.print("\n[bold cyan]Stage 2/6:[/] Block Classification")
-    classified = classify_document(pages, exam_code, config, vlm_fn=vlm_fn)
-    console.print(f"  → {len(classified.blocks)} blocks, {len(classified.question_groups)} question groups")
-
-    # Stage 3: Extract
-    console.print("\n[bold cyan]Stage 3/6:[/] Content Extraction")
-    extracted = extract_content(classified, config, vlm_fn=vlm_fn, output_dir=output_dir)
-    stats = extracted.extraction_stats
-    console.print(f"  → {stats.get('vlm_transcription_count', 0)} VLM transcriptions, {stats.get('raster_fallback_count', 0)} raster fallbacks")
-
-    # Stitching
-    console.print("\n[dim]  Running page boundary stitching...[/]")
-    extracted = stitch_pages(extracted, config)
-
-    # Stage 4: Validate
-    if not skip_validation:
-        console.print("\n[bold cyan]Stage 4/6:[/] Validation")
-        validated = validate_document(extracted, config)
-        console.print(f"  → {len(validated.validation_errors)} errors, {len(validated.validation_warnings)} warnings")
-    else:
-        console.print("\n[bold yellow]Stage 4/6:[/] Validation [dim](skipped)[/]")
-        from models.schema import ValidatedDocument
-        validated = ValidatedDocument(
-            exam_code=extracted.exam_code,
-            question_groups=extracted.question_groups,
-            extraction_stats=extracted.extraction_stats,
-        )
-
-    # Stage 5: Assemble
-    console.print("\n[bold cyan]Stage 5/6:[/] JSON Assembly")
-    json_path = assemble_json(validated, config, pdf_path, output_dir=output_dir)
-    console.print(f"  → {json_path}")
-
-    # Stage 6: Render
+    # Stage 2: Process
+    console.print("\n[bold cyan]Stage 2/3:[/] VLM Processing")
+    extracted_json = process_document(pages, config, vlm_fn, output_dir)
+    import json
+    with open(output_dir / f"{exam_code}.json", "w") as f:
+        json.dump(extracted_json, f, indent=2)
+    console.print(f"  → Saved to {output_dir / f'{exam_code}.json'}")
+    
+    # Stage 3: Render
     if not skip_render:
-        console.print("\n[bold cyan]Stage 6/6:[/] Rendering MD & HTML")
-        md_path, html_path = render_outputs(json_path, config, output_dir=output_dir)
+        console.print("\n[bold cyan]Stage 3/3:[/] Rendering MD & HTML")
+        md_path, html_path = render_outputs(output_dir / f"{exam_code}.json", config, output_dir=output_dir)
         console.print(f"  → {md_path}")
         console.print(f"  → {html_path}")
     else:
-        console.print("\n[bold yellow]Stage 6/6:[/] Rendering [dim](skipped)[/]")
+        console.print("\n[bold yellow]Stage 3/3:[/] Rendering [dim](skipped)[/]")
 
-    # Summary
-    review_count = sum(1 for g in validated.question_groups if g.needs_review)
-    console.print(Panel(
-        f"[bold green]✓ Pipeline complete[/]\n"
-        f"Questions: {len(validated.question_groups)}\n"
-        f"Needing review: {review_count}\n"
-        f"Output: {output_dir}",
-        title="Done",
-        border_style="green",
-    ))
+    console.print(Panel(f"[bold green]✓ Processing complete[/]\nQuestions Extracted: {len(extracted_json.get('questions', []))}\nOutput: {output_dir}", title="Done", border_style="green"))
 
 
 # ---------------------------------------------------------------------------
@@ -190,8 +253,7 @@ def _run_pipeline(
 @click.option("--input-dir", type=click.Path(exists=True), help="Path to directory of PDFs (use with --bulk)")
 @click.option("--bulk", is_flag=True, help="Process all PDFs in input-dir")
 @click.option("--exam-code", type=str, help="Override exam code (single file mode only)")
-@click.option("--skip-render", is_flag=True, help="Skip Stage 6, produce JSON only")
-@click.option("--skip-validation", is_flag=True, help="Skip Stage 4 (not recommended)")
+@click.option("--skip-render", is_flag=True, help="Skip Stage 3, produce JSON only")
 @click.option("--debug", is_flag=True, help="Save intermediate representations and page rasters")
 @click.option("--review-only", is_flag=True, help="Re-render MD/HTML for flagged questions")
 @click.option("--config", "config_path", type=click.Path(), help="Path to alternate pipeline.yaml")
@@ -201,7 +263,6 @@ def main(
     bulk: bool,
     exam_code: Optional[str],
     skip_render: bool,
-    skip_validation: bool,
     debug: bool,
     review_only: bool,
     config_path: Optional[str],
@@ -230,7 +291,7 @@ def main(
         for pdf in pdfs:
             code = exam_code or pdf.stem
             try:
-                _run_pipeline(pdf, code, config, vlm_fn, skip_render, skip_validation, debug)
+                _run_pipeline(pdf, code, config, vlm_fn, skip_render, debug)
             except Exception as exc:
                 console.print(f"[red]Failed: {pdf.name} — {exc}[/]")
                 if debug:
@@ -241,7 +302,7 @@ def main(
         # Single file mode
         pdf = Path(input_path)
         code = exam_code or pdf.stem
-        _run_pipeline(pdf, code, config, vlm_fn, skip_render, skip_validation, debug)
+        _run_pipeline(pdf, code, config, vlm_fn, skip_render, debug)
 
     else:
         console.print("[red]Error: Provide --input or --input-dir with --bulk[/]")

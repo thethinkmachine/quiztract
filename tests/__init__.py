@@ -1,1 +1,0 @@
-"""Quiztract test suite."""

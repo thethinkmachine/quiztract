@@ -1,3 +1,6 @@
+ - **HF cache dir**: Repo-local Hugging Face cache location for model downloads
+ - **VLM GPU memory budget**: How much VRAM the loader should reserve for the model
+ - **VLM offload dir**: Repo-local spill directory used when the model is auto-sharded
 # Quiztract
 
 **CBT Question Paper PDF → Structured JSON Pipeline**
@@ -76,6 +79,9 @@ All tunable parameters are in `config/pipeline.yaml`. Key settings:
 
 - **DPI**: Page rendering resolution (default: 300)
 - **VLM model**: Which vision-language model to use
+- **HF cache dir**: Hugging Face cache location for model downloads, defaults to `~/.cache/huggingface`
+- **VLM GPU memory budget**: How much VRAM the loader should reserve for the model
+- **VLM offload dir**: Spill directory used when the model is auto-sharded, defaults to `~/.cache/quiztract/vlm-offload`
 - **Confidence threshold**: Below which blocks are flagged for review
 - **Option count limits**: Expected MCQ option range for validation
 
