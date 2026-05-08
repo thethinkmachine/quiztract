@@ -24,7 +24,7 @@ def render_markdown(json_path: Path, config: dict[str, Any]) -> str:
             lines.append(f"**Correct Answer:** {ca}\n")
             
         # Meta
-        meta = q.get("metadata", {})
+        meta = q.get("metadata") or {}
         if meta:
             lines.append("**Metadata:**")
             for k, v in meta.items():
@@ -38,7 +38,7 @@ def render_markdown(json_path: Path, config: dict[str, Any]) -> str:
             lines.append("")
 
         # Images
-        for img in q.get("images", []):
+        for img in q.get("images") or []:
             path = img.get("local_path")
             desc = img.get("description", "Image")
             if path:
@@ -46,9 +46,9 @@ def render_markdown(json_path: Path, config: dict[str, Any]) -> str:
                 lines.append("")
 
         # Tables
-        for table in q.get("tables", []):
-            headers = table.get("headers", [])
-            rows = table.get("rows", [])
+        for table in q.get("tables") or []:
+            headers = table.get("headers") or []
+            rows = table.get("rows") or []
             if headers:
                 lines.append("| " + " | ".join(headers) + " |")
                 lines.append("|" + "|".join(["---"] * len(headers)) + "|")
@@ -57,7 +57,7 @@ def render_markdown(json_path: Path, config: dict[str, Any]) -> str:
             lines.append("")
 
         # Options
-        options = q.get("options", [])
+        options = q.get("options") or []
         for j, opt in enumerate(options):
             label = chr(65 + j)  # A, B, C, D
             lines.append(f"- **{label}.** {opt}")

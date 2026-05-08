@@ -325,7 +325,7 @@
                             <thead><tr>{% for h in table.headers %}<th>{{ h }}</th>{% endfor %}</tr></thead>
                             {% endif %}
                             <tbody>
-                                {% for row in table.get('rows', []) %}
+                                {% for row in table.get('rows') or [] %}
                                 <tr>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>
                                 {% endfor %}
                             </tbody>

@@ -23,6 +23,15 @@ def process_document(pages: list[PageDocument], config: dict[str, Any], vlm_fn: 
     Output the data as a JSON object containing a list of questions.
     For any image (graph, network, picture), output its bounding box as [ymin, xmin, ymax, xmax] where coordinates are integers from 0 to 1000 representing normalized relative positions of the page width and height. Do NOT use percentages.
     
+    CRITICAL RULES:
+    1. Do NOT solve the questions.
+    2. Do NOT hallucinate options. Only extract options that are explicitly printed on the page.
+    3. If there are no options printed, leave the options list empty. Never generate your own combinations or lists.
+    4. For 'COMPREHENSION', 'NAT', and 'SA' question types, the 'options' list MUST be strictly empty [] under all circumstances.
+    5. Do NOT output the same question multiple times. Eliminate duplicates.
+    6. Ensure the 'question_text' actually contains the text of the question, not just metadata headers.
+    7. Strip any 'Question ID' or 'Option ID' numeric prefixes (e.g., '6406536034572.') from both the question text and the extracted options.
+    
     Format:
     {
       "questions": [
