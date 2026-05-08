@@ -5,10 +5,10 @@ ingest:
   debug_save_page_rasters: false
 
 extract:
-  vlm_model_id: "ibm-granite/granite-vision-3.3-2b"
-  vlm_device: "cuda"
+  vlm_model_id: "google/gemma-4-E2B-it"
+  vlm_device: "cpu"
   vlm_4bit_quantization: true
-  vlm_max_new_tokens: 4096
+  vlm_max_new_tokens: 8192
   hf_cache_dir: "~/.cache/huggingface"
   vlm_gpu_max_memory_gb: 5
   vlm_cpu_max_memory_gb: 32

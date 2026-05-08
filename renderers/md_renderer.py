@@ -15,9 +15,8 @@ def render_markdown(json_path: Path, config: dict[str, Any]) -> str:
         return "\n".join(lines)
 
     for i, q in enumerate(questions, 1):
-        q_id = q.get("question_id", f"UNK-{i}")
         q_type = q.get("question_type", "MCQ")
-        lines.append(f"## Question {i} (ID: {q_id} | Type: {q_type})\n")
+        lines.append(f"## Question {i} (Type: {q_type})\n")
         
         ca = q.get("correct_answer")
         if ca:

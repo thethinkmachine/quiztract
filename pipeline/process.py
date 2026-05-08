@@ -16,6 +16,7 @@ def process_document(pages: list[PageDocument], config: dict[str, Any], vlm_fn: 
     figures_dir.mkdir(parents=True, exist_ok=True)
     
     all_questions = []
+    seen_questions = set()
     
     prompt = """You are analyzing a page from a test paper. Your task is to extract all questions, tables, inline latex math, and metadata.
     Carefully distinguish between different question types: 'MCQ' (Multiple Choice), 'MSQ' (Multiple Select), 'NAT' (Numerical Answer), and 'COMPREHENSION' (A parent passage with no direct options).
@@ -30,16 +31,57 @@ def process_document(pages: list[PageDocument], config: dict[str, Any], vlm_fn: 
     4. For 'COMPREHENSION', 'NAT', and 'SA' question types, the 'options' list MUST be strictly empty [] under all circumstances.
     5. Do NOT output the same question multiple times. Eliminate duplicates.
     6. Ensure the 'question_text' actually contains the text of the question, not just metadata headers.
-    7. Strip any 'Question ID' or 'Option ID' numeric prefixes (e.g., '6406536034572.') from both the question text and the extracted options.
+    7. Strip any 'Option ID' numeric prefixes from the extracted options.
+    
+    EXAMPLE OUTPUT:
+    {
+      "questions": [
+        {
+          "question_type": "MCQ",
+          "question_text": "What is the capital of France?",
+          "options": ["Paris", "London", "Berlin", "Madrid"],
+          "correct_answer": "Paris",
+          "metadata": {"Correct Marks": "1", "Negative Marks": "0.33"},
+          "tables": [],
+          "images": []
+        },
+        {
+          "question_type": "MSQ",
+          "question_text": "Which of the following are prime numbers?",
+          "options": ["2", "4", "5", "9"],
+          "correct_answer": ["2", "5"],
+          "metadata": {"Correct Marks": "2", "Negative Marks": "0"},
+          "tables": [],
+          "images": []
+        },
+        {
+          "question_type": "NAT",
+          "question_text": "Calculate the area of a circle with radius 3. Use pi = 3.14.",
+          "options": [],
+          "correct_answer": "28.26",
+          "metadata": {"Correct Marks": "1", "Negative Marks": "0"},
+          "tables": [],
+          "images": []
+        },
+        {
+          "question_type": "COMPREHENSION",
+          "question_text": "Read the following passage carefully: The nodes A, B, and C form a network...",
+          "options": [],
+          "correct_answer": null,
+          "metadata": {"Question Pattern Type": "NonMatrix"},
+          "tables": [],
+          "images": [{"type": "network", "description": "Graph of nodes A, B, C", "bbox": [100, 200, 300, 400]}]
+        }
+      ]
+    }
     
     Format:
     {
       "questions": [
         {
-          "question_id": "string or null",
-          "question_type": "MCQ | MSQ | NAT | COMPREHENSION",
+          "question_type": "MCQ | MSQ | NAT | COMPREHENSION | SA",
           "question_text": "text including latex math",
-          "options": ["A", "B", "C", "D"], // Leave empty if NAT or COMPREHENSION
+          "options": ["A", "B", "C", "D"], // Leave empty if NAT, SA or COMPREHENSION
           "correct_answer": "string, list of strings, or null",
           "metadata": {},
           "tables": [{"headers": [], "rows": []}],
@@ -67,25 +109,61 @@ def process_document(pages: list[PageDocument], config: dict[str, Any], vlm_fn: 
                 logger.error(f"Failed to decode JSON for page {page.page_number}:\n{result_text}")
                 continue
                 
-            for q in page_data.get("questions", []):
+            for q_index, q in enumerate(page_data.get("questions", [])):
                 q["page_number"] = page.page_number
+                
+                # 1. Clean Question Text and remove metadata prefixes
+                raw_text = q.get("question_text", "")
+                if not raw_text:
+                    continue
+                # Remove prefixes like "Question Number : 2 Question Id : 6406531862692 Question Type : MSQ"
+                clean_text = re.sub(r'(?i)^(Question Number\s*:\s*\d+\s*)?(Question Id\s*:\s*\d+\s*)?(Question Type\s*:\s*[A-Za-z]+\s*)?', '', raw_text).strip()
+                # Remove standalone digit prefixes like "6406536034580. "
+                clean_text = re.sub(r'^\d+\.\s*(?:\u2026\s*)?', '', clean_text).strip()
+                q["question_text"] = clean_text
+                
+                # 2. Deduplicate
+                if clean_text in seen_questions:
+                    continue
+                seen_questions.add(clean_text)
+
+                # 3. Clean Options
+                q_type = q.get("question_type", "MCQ").upper()
+                if q_type in ["COMPREHENSION", "NAT", "SA"]:
+                    q["options"] = []
+                else:
+                    opts = q.get("options") or []
+                    # If more than 8 options, it is almost certainly a hallucination
+                    if len(opts) > 8:
+                        q["options"] = []
+                    else:
+                        # Clean ID prefixes from options (e.g. "6406536034572. \u2192 Printed...")
+                        cleaned_opts = []
+                        for opt in opts:
+                            cleaned_opts.append(re.sub(r'^\d+\.\s*(?:\u2192\s*|\u2026\s*)?', '', str(opt)).strip())
+                        q["options"] = cleaned_opts
                 
                 # Crop and save extracted images
                 for i, img_info in enumerate(q.get("images", [])):
                     bbox = img_info.get("bbox")
                     if bbox and len(bbox) == 4:
                         width, height = page.raster_image.size
+                        # Detect if VLM is using 0-1 ratios instead of 0-1000 integers
+                        # If all values are <= 1.0 and at least one is > 0, it's likely a 0-1 ratio.
+                        is_ratio = all(0 <= v <= 1.0 for v in bbox)
+                        scale = 1.0 if is_ratio else 1000.0
+                        
                         ymin, xmin, ymax, xmax = bbox
                         
-                        # Convert 0-1000 normalized to pixels
-                        left = int((xmin / 1000.0) * width)
-                        top = int((ymin / 1000.0) * height)
-                        right = int((xmax / 1000.0) * width)
-                        bottom = int((ymax / 1000.0) * height)
+                        # Convert to pixels
+                        left = int((xmin / scale) * width)
+                        top = int((ymin / scale) * height)
+                        right = int((xmax / scale) * width)
+                        bottom = int((ymax / scale) * height)
                         
                         try:
                             crop = page.raster_image.crop((left, top, right, bottom))
-                            img_filename = f"page_{page.page_number}_q_{q.get('question_id', 'unk')}_img_{i}.png"
+                            img_filename = f"page_{page.page_number}_q_{q_index}_img_{i}.png"
                             img_path = figures_dir / img_filename
                             crop.save(img_path)
                             img_info["local_path"] = str(img_path.relative_to(output_dir))
